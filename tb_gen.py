@@ -17,23 +17,23 @@
 # Line 3 contains a list of generic parameter names, separated by commas. 
 # If no generic arguments are needed, write None in this line.
 #
-# Line 4 contains a list of generic arguments, separated by commas, 
+# Line 4 contains a list of generic paramter values, separated by commas, 
 # in the same order as the previously given generic parameter names.
 # If no generic arguments are needed, write None in this line.
 #
-# Line 5 contains a comma-separated list of input pins. If the pin is a
-# multi-bit bus, specify its length in parentheses after its name.
+# Line 5 contains a comma-separated list of input pins, in the same 
+# order as the pins are specified in the entity itself. If a pin is a
+# multi-bit bus, specify its width in parentheses after its name.
 #
-# Line 6 contains a comma-separated list of output pins. If the pin is a
-# multi-bit bus, specify its length in parentheses after its name.
+# Line 6 contains a comma-separated list of output pins, in the same 
+# order as the pins are specified in the entity itself. If a pin is a
+# multi-bit bus, specify its width in parentheses after its name.
 #
 # Lines 7 onwards contain test cases. Test cases comprise
 # a comma-separated list of pin values, where input pins'
 # values are given first, in the order specified in line 5,
 # and output pins' values are given next, in the order
-# specified on line 6. Pin values must be surrounded by the 
-# correct style of quotes for their data type, i.e. single 
-# quotes for std_logic and double quotes for std_logic_vector.
+# specified on line 6.
 #
 #
 # e.g.
@@ -44,17 +44,17 @@
 #   rtl
 #   # generic parameter names
 #   g_BUS_WIDTH
-#   # generic arguments
+#   # generic paramter values
 #   2
 #   # inputs
 #   in1(2), in2(2), sel
 #   # outputs
 #   out1(2)
 #   # test cases
-#   "01","00",'0',"01"
-#   "10","00",'0',"10"
-#   "00","11",'0',"00"
-#   "00","11",'1',"11"
+#   01,00,0,01
+#   10,00,0,10
+#   00,11,0,00
+#   00,11,1,11
 #
 ##############################################################################
 
@@ -123,11 +123,11 @@ class CombTestBench:
             output_pins = content[5].split(",")
             self.output_pins = self.__parse_pins(output_pins)
             # save other lines as test case data
-            self.test_case_data = [
+            self.test_case_data = self.__quote_pin_values([
                 dict(zip(list(self.input_pins.keys()) + 
                          list(self.output_pins.keys()), l.split(",")))
                 for l in content[6:]
-            ]
+            ])
     
     
     def generate(self, filename: str):
@@ -169,7 +169,7 @@ class CombTestBench:
         # no params if 'none' is part of line
         if [p.lower() for p in params].count("none"):
             params = None
-        # no params if 'none' is part of line
+        # no values if 'none' is part of line
         if [v.lower() for v in values].count("none"):
             values = None
         # return generic argument dict if params and values were present
@@ -189,19 +189,31 @@ class CombTestBench:
             else:
                 # otherwise save pin name and None
                 result[p] = None
-        return result        
+        return result
+
+
+    def __quote_pin_values(self, test_case_data: list) -> list:
+        # concatenate input and output pin dicts
+        pins = dict(self.input_pins, **self.output_pins)
+        # for every test case
+        for t in test_case_data:
+            # for each pin in test case
+            for k in t.keys():
+                # quote value accordingly: single quotes for single bit
+                # (std_logic), double quotes for multi-bit (std_logic_vector)
+                t[k] = f'"{t[k]}"' if pins[k] else f"'{t[k]}'"
+        return test_case_data
     
         
     def __generate_internal_signal_declarations(self) -> str:
         # add comment line
         result = indent_string("-- internal signal declarations\n", 4)
         # for each set of pins (input and output)
-        pin_sets = [self.input_pins, self.output_pins]
-        for s in pin_sets:
+        for s in [self.input_pins, self.output_pins]:
             # for each pin and width (if multi-bit bus) pair
             for p, w in s.items():
                 # vector type if width was given
-                t = "std_logic_vector({0} downto 0)".format(w-1) if w else "std_logic"
+                t = f"std_logic_vector({w-1} downto 0)" if w else "std_logic"
                 # generate and add signal declaration
                 result += indent_string("signal tb_" + p + ": " + t + ";\n", 4)
         # return block of signal declarations
@@ -216,7 +228,7 @@ class CombTestBench:
             # generate generic map
             generic_map += "generic map ("
             generic_map += ", ".join([
-                "{0} => {1}".format(param, val)
+                f"{param} => {val}"
                 for param, val in self.generic_arguments.items()
             ])
             generic_map += ")\n"
@@ -239,24 +251,24 @@ class CombTestBench:
     
     def __generate_test_case(self, num: int) -> str:
         # add comment
-        lines = ["-- test case {0}".format(num)]
+        lines = [f"-- test case {num}"]
         # assign values to input pins
         lines += ["tb_{0} <= {1};".format(ip, self.test_case_data[num][ip])
                   for ip in self.input_pins]
         # wait time
         lines.append("wait for 10 ns;")
         # assert output values are as expected
-        lines.append("assert (" +  " and ".join(
-            ["(tb_{0} = {1})".format(op, self.test_case_data[num][op])
-             for op in self.output_pins]
-        ) + ")")
-        lines.append("report \"Test case {0} failed!\"".format(num))
+        lines.append("assert (" +  " and ".join([
+            "(tb_{0} = {1})".format(op, self.test_case_data[num][op])
+            for op in self.output_pins
+        ]) + ")")
+        lines.append(f'report "Test case {num} failed!"')
         lines.append("severity error;")
         # increment fail count if test failed
-        lines.append("if (" + " or ".join(
-            ["(tb_{0} /= {1})".format(op, self.test_case_data[num][op])
-             for op in self.output_pins]
-        ) + ") then")
+        lines.append("if (" + " or ".join([
+            "(tb_{0} /= {1})".format(op, self.test_case_data[num][op])
+            for op in self.output_pins
+        ]) + ") then")
         lines.append(indent_string("fail_count := fail_count + 1;", 4))
         lines.append("end if;")
         # indent lines of code 8 spaces and join with newlines
@@ -300,8 +312,8 @@ class CombTestBench:
     
     
 if __name__ == "__main__":
-    # get entity name, architecture name, test case filename
-    # and test bench VHDL filename from command line arguments
+    # get test case filename and test bench VHDL filename 
+    # from command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("test_case_file", 
                         help="the file in which test cases are defined")
