@@ -102,9 +102,9 @@ class CombTestBench:
         with open(test_case_file, 'r') as f:
             # read lines from file
             content = f.readlines()
-            # remove whitespace, newlines and comment lines
+            # remove whitespace, newlines, empty lines and comment lines
             content = [l.replace(" ", "").replace("\n", "") for l in content]
-            content = [l for l in content if l[0] != "#"]
+            content = [l for l in content if len(l) > 0 and l[0] != "#"]
             # get entity name from first line
             self.entity_name = content[0]
             # notify user of test bench entity name
