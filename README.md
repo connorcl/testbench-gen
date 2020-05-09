@@ -1,2 +1,2 @@
 # testbench-gen
-A simple VHDL test bench generator (for combinational logic) written in Python
+A VHDL test bench generator for combinational and sequential logic, written in Python
