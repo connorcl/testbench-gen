@@ -1,65 +1,47 @@
 #!/usr/bin/env python3
 
 ##############################################################################
-# A simple VHDL test bench generator (for combinational logic)               #
+# A VHDL test bench generator for combinational and sequential logic         #
 ##############################################################################
 #
-#########################
-# Test case file format #   
-#########################
+#################################
+# Test case (input) file format #   
+#################################
 #
-# Spaces and comment lines beginning with # are ignored.
+# Test case files are JSON files. The following properties are read:
 #
-# Line 1 contains the name of the entity to test.
-#
-# Line 2 contains the name of the architecture to use for the given entity.
-#
-# Line 3 contains a list of generic parameter names, separated by commas. 
-# If no generic arguments are needed, write None in this line.
-#
-# Line 4 contains a list of generic paramter values, separated by commas, 
-# in the same order as the previously given generic parameter names.
-# If no generic arguments are needed, write None in this line.
-#
-# Line 5 contains a comma-separated list of input pins, in the same 
-# order as the pins are specified in the entity itself. If a pin is a
-# multi-bit bus, specify its width in parentheses after its name.
-#
-# Line 6 contains a comma-separated list of output pins, in the same 
-# order as the pins are specified in the entity itself. If a pin is a
-# multi-bit bus, specify its width in parentheses after its name.
-#
-# Lines 7 onwards contain test cases. Test cases comprise
-# a comma-separated list of pin values, where input pins'
-# values are given first, in the order specified in line 5,
-# and output pins' values are given next, in the order
-# specified on line 6.
-#
-#
-# e.g.
-#
-#   # entity
-#   mux2to1
-#   # architecture
-#   rtl
-#   # generic parameter names
-#   g_BUS_WIDTH
-#   # generic paramter values
-#   2
-#   # inputs
-#   in1(2), in2(2), sel
-#   # outputs
-#   out1(2)
-#   # test cases
-#   01,00,0,01
-#   10,00,0,10
-#   00,11,0,00
-#   00,11,1,11
+# entity: the name of the entity to test
+# architecture: the name of the architecture to use for the given entity
+# library: the library in which the entity is found
+# clocked: (bool) whether the entity is clocked
+# clock period: (integer) clock period in nanoseconds to use 
+#               if entity is clocked
+# generic_params: an object where the keys are generic parameter
+#                 names and the values are the values to use for these
+#                 parameters
+# input_pins: an object where the keys are the names of the input pins and
+#             the values are the std_logic_vector bus width of these pins
+#             (null for single-bit std_logic)
+# clock_pin: the name of the clock pin (which should not be included
+#            with the input pins) if the entity is clocked
+# output pins: an object of the same format as the input pins
+# test cases: an array of objects, each object representing a test case.
+#             Keys in these test case objects are the names of the input
+#             and output pins, and the values are the given (for input pins) 
+#             or expected (for output pins) values of these pins. Note that 
+#             the correct quotes will automatically be used to surround these 
+#             values, and as such the values should not be quoted. Another
+#             key '_wait' must also be specified, which controls how long to
+#             wait in between setting input pins and checking output pins:
+#             0 means wait for 10 ns, a negative number means wait until 
+#             that many falling clock edges, and a positive number means
+#             wait until that many rising clock edges
 #
 ##############################################################################
 
 
-import argparse    
+import json
+import argparse
 
 
 def indent_string(string: str, amount: int) -> str:
@@ -82,52 +64,33 @@ def indent_string(string: str, amount: int) -> str:
     return (" " * amount) + string
 
 
-class CombTestBench:
+class TestBench:
             
-    def load(self, test_case_file: str):
+    def load(self, test_bench_file: str):
         """
-        Load test bench details from test case file.
+        Load test bench details from a JSON test case file.
 
         Parameters
         ----------
-        test_case_file : str
-            The file in which test case details are stored.
+        test_bench_file : str
+            The JSON file in which test case details are stored.
 
         Returns
         -------
         None.
 
         """
-        # open test case file
-        with open(test_case_file, 'r') as f:
-            # read lines from file
-            content = f.readlines()
-            # remove whitespace, newlines, empty lines and comment lines
-            content = [l.replace(" ", "").replace("\n", "") for l in content]
-            content = [l for l in content if len(l) > 0 and l[0] != "#"]
-            # get entity name from first line
-            self.entity_name = content[0]
-            # notify user of test bench entity name
-            print("Test bench entity will be called '" + 
-                  self.entity_name + "_tb'")
-            # get architecture name from second line
-            self.architecture_name = content[1]
-            # get generic parameters and arguments from third and fourth lines
-            self.generic_arguments = self.__parse_generic_arguments(
-                content[2].split(","),
-                content[3].split(",")
-            )
-            # get input and output pins from fifth and sixth lines
-            input_pins = content[4].split(",")
-            self.input_pins = self.__parse_pins(input_pins)
-            output_pins = content[5].split(",")
-            self.output_pins = self.__parse_pins(output_pins)
-            # save other lines as test case data
-            self.test_case_data = self.__quote_pin_values([
-                dict(zip(list(self.input_pins.keys()) + 
-                         list(self.output_pins.keys()), l.split(",")))
-                for l in content[6:]
-            ])
+        # parse JSON file, saving result to dict
+        with open(test_bench_file, 'r') as f:
+            self.data = json.load(f)
+            # add correct quotes to test case pin values - single for
+            # std_logic (single bit), double for std_logic_vector (bus)
+            self.__quote_pin_values()
+            # convert clock pin to same format as input and output pins,
+            # giving it a single bit width
+            self.data["clock_pin"] = { 
+                self.data["clock_pin"]: None 
+            } if self.data["clocked"] else {}
     
     
     def generate(self, filename: str):
@@ -146,13 +109,23 @@ class CombTestBench:
 
         """
         # add header, including entity declaration and architecture header
-        result = self.__HEADER.format(self.entity_name)
+        result = self.__HEADER.format(
+            self.data["library"],
+            self.data["entity"],
+            self.data["architecture"]
+        )
+        # add clock wait procedure if entity is clocked
+        if self.data["clocked"]:
+            result += self.__CLK_WAIT_PRCD + "\n"
         # add internal signal declarations
         result += self.__generate_internal_signal_declarations()
         # add instantiation of unit under test
         result += "begin\n" + self.__generate_uut_instantiation()
-        # begin test bench logic
-        result += "\n" + self.__TB_LOGIC_HEADER
+        # add clock process if entity is clocked
+        if self.data["clocked"]:
+            result += "\n" + self.__generate_clock_process()
+        # begin test bench process
+        result += "\n" + self.__TB_PROC_HEADER
         # add test cases
         result += self.__generate_test_cases()
         # add overall test pass check and footer
@@ -161,55 +134,30 @@ class CombTestBench:
         #print(result)
         # write to given VHDL file
         print("Writing test bench VHDL to " + filename)
+        print("Testbench entity is called '" + self.data["entity"]  + "_tb'")
         with open(filename, 'w') as f:
             f.write(result)
-            
-            
-    def __parse_generic_arguments(self, params: list, values: list) -> dict:
-        # no params if 'none' is part of line
-        if [p.lower() for p in params].count("none"):
-            params = None
-        # no values if 'none' is part of line
-        if [v.lower() for v in values].count("none"):
-            values = None
-        # return generic argument dict if params and values were present
-        return dict(zip(params, values)) if params and values else None
-        
-            
-    def __parse_pins(self, pins: list) -> dict:
-        # dictionary which stores pin name and bus width if multi-bit bus
-        result = {}
-        # for each pin declaration
-        for p in pins:
-            # find parentheses meaning multi-bit bus
-            paren = p.find("(")
-            if paren >= 0:
-                # save pin name and bus width if width was given
-                result[p[:paren]] = int(p[paren+1:-1])
-            else:
-                # otherwise save pin name and None
-                result[p] = None
-        return result
 
 
-    def __quote_pin_values(self, test_case_data: list) -> list:
+    def __quote_pin_values(self):
         # concatenate input and output pin dicts
-        pins = dict(self.input_pins, **self.output_pins)
+        pins = dict(self.data["input_pins"], 
+                    **self.data["output_pins"])
         # for every test case
-        for t in test_case_data:
-            # for each pin in test case
-            for k in t.keys():
-                # quote value accordingly: single quotes for single bit
-                # (std_logic), double quotes for multi-bit (std_logic_vector)
-                t[k] = f'"{t[k]}"' if pins[k] else f"'{t[k]}'"
-        return test_case_data
+        for t in self.data["test_cases"]:
+            # for each pin
+            for p in pins.keys():
+                # give value single or double quotes based on pin bus width
+                t[p] = f'"{t[p]}"' if pins[p] else f"'{t[p]}'"
     
         
     def __generate_internal_signal_declarations(self) -> str:
         # add comment line
         result = indent_string("-- internal signal declarations\n", 4)
-        # for each set of pins (input and output)
-        for s in [self.input_pins, self.output_pins]:
+        # for each set of pins (input, clock and output)
+        for s in [self.data["input_pins"],
+                  self.data["clock_pin"],
+                  self.data["output_pins"]]:
             # for each pin and width (if multi-bit bus) pair
             for p, w in s.items():
                 # vector type if width was given
@@ -224,28 +172,50 @@ class CombTestBench:
         # generic map empty by default
         generic_map = ""
         # if generic arguments were specified
-        if self.generic_arguments:
+        if self.data["generic_params"]:
             # generate generic map
-            generic_map += "generic map ("
-            generic_map += ", ".join([
-                f"{param} => {val}"
-                for param, val in self.generic_arguments.items()
+            generic_map += indent_string("generic map (\n", 11)
+            generic_map += ",\n".join([
+                indent_string(f"{param} => {val}", 15)
+                for param, val in
+                self.data["generic_params"].items()
             ])
-            generic_map += ")\n"
+            generic_map += "\n" + indent_string(")\n", 11)
         # format unit under test instantiation template
         result = self.__UUT_TEMPLATE.format(
-            self.entity_name, 
-            self.architecture_name,
+            self.data["library"],
+            self.data["entity"],
+            self.data["architecture"],
             generic_map,
-            ", ".join(["tb_" + p for p in self.input_pins]),
-            ", ".join(["tb_" + p for p in self.output_pins]))
+            self.__generate_port_map(self.data["input_pins"]) +
+            self.__generate_port_map(self.data["clock_pin"]) +
+            self.__generate_port_map(self.data["output_pins"], True)
+        )
         return result
+    
+    
+    def __generate_port_map(self, pins: dict, end: bool = False) -> str:
+        # generate port map for pins, mapping entity port to testbench signal
+        result =  ",\n".join([
+            indent_string(f'{p} => {"tb_" + p}', 15)
+            for p in pins.keys()
+        ])
+        if len(result) > 0 and not end:
+            result += ",\n"
+        return result
+    
+    
+    def __generate_clock_process(self) -> str:
+        return self.__CLK_PROC_TEMPLATE.format(
+            next(iter(self.data["clock_pin"])),
+            self.data["clock_period"] // 2
+        )
     
     
     def __generate_test_cases(self) -> str:
         # generate vhdl test case for each given test case
         test_cases = [self.__generate_test_case(i) 
-                      for i in range(len(self.test_case_data))]
+                      for i in range(len(self.data["test_cases"]))]
         return "\n".join(test_cases)
             
     
@@ -253,50 +223,102 @@ class CombTestBench:
         # add comment
         lines = [f"-- test case {num}"]
         # assign values to input pins
-        lines += ["tb_{0} <= {1};".format(ip, self.test_case_data[num][ip])
-                  for ip in self.input_pins]
+        lines += [
+            "tb_{0} <= {1};".format(ip, self.data["test_cases"][num][ip])
+            for ip in self.data["input_pins"]
+        ]
         # wait time
-        lines.append("wait for 10 ns;")
+        lines.append(
+            self.__generate_wait_statement(
+                self.data["test_cases"][num]["_wait"]
+            )
+        )
         # assert output values are as expected
         lines.append("assert (" +  " and ".join([
-            "(tb_{0} = {1})".format(op, self.test_case_data[num][op])
-            for op in self.output_pins
+            "(tb_{0} = {1})".format(op, self.data["test_cases"][num][op])
+            for op in self.data["output_pins"]
         ]) + ")")
         lines.append(f'report "Test case {num} failed!"')
         lines.append("severity error;")
         # increment fail count if test failed
         lines.append("if (" + " or ".join([
-            "(tb_{0} /= {1})".format(op, self.test_case_data[num][op])
-            for op in self.output_pins
+            "(tb_{0} /= {1})".format(op, self.data["test_cases"][num][op])
+            for op in self.data["output_pins"]
         ]) + ") then")
         lines.append(indent_string("fail_count := fail_count + 1;", 4))
         lines.append("end if;")
         # indent lines of code 8 spaces and join with newlines
         return "\n".join([indent_string(l, 8) for l in lines]) + "\n"
+    
+
+    def __generate_wait_statement(self, code: int) -> str:
+        if code > 0:
+            return "wait_until_clk_edges({0}, {1}, {2});".format(
+                "tb_" + next(iter(self.data["clock_pin"])),
+                code,
+                "true"
+            )
+        elif code < 0:
+            return "wait_until_clk_edges({0}, {1}, {2});".format(
+                "tb_" + next(iter(self.data["clock_pin"])),
+                -code,
+                "false"
+            )
+        else:
+            return "wait for 10 ns;"
             
     
     __HEADER = ("--------------------------------------------------------\n" +
-                "-- Test bench for combinational entity {0}\n" +
+                "-- Test bench for entity {0}.{1}({2})\n" +
                 "-- Generated by tb_gen.py\n" +
                 "--------------------------------------------------------\n\n"
                 "library ieee;\n" +
-                "use ieee.std_logic_1164.all;\n\n" +
+                "use ieee.std_logic_1164.all;\n" +
+                "library {0};\n\n" +
                 "-- test bench entity\n" +
-                "entity {0}_tb is\n" +
-                "end {0}_tb;\n\n" +
+                "entity {1}_tb is\n" +
+                "end {1}_tb;\n\n" +
                 "-- test bench architecture\n" +
-                "architecture tb of {0}_tb is\n")
+                "architecture tb of {1}_tb is\n")
+    
+    __CLK_WAIT_PRCD = (indent_string("-- procedure to wait for a number of " +
+                                     "rising or falling clock edges\n", 4) +
+                       indent_string("procedure wait_until_clk_edges " + 
+                                     "(signal clk: in std_logic; " + 
+                                     "n: in positive; rising: in boolean) is\n", 4) +
+                       indent_string("begin\n", 4) +
+                       indent_string("if rising then\n", 8) +
+                       indent_string("for i in 1 to n loop\n", 12) +
+                       indent_string("wait until rising_edge(clk);\n", 16) +
+                       indent_string("end loop;\n", 12) +
+                       indent_string("else\n", 8) +
+                       indent_string("for i in 1 to n loop\n", 12) +
+                       indent_string("wait until falling_edge(clk);\n", 16) +
+                       indent_string("end loop;\n", 12) +
+                       indent_string("end if;\n", 8) + 
+                       indent_string("end procedure;\n", 4))
     
     __UUT_TEMPLATE =  (indent_string("-- instantiate unit under test\n", 4) +               
-                       indent_string("E_UUT: entity work.{0}({1})\n", 4) +
-                       indent_string("{2}", 11) +
-                       indent_string("port map ({3}, {4});\n", 11))
+                       indent_string("E_UUT: entity {0}.{1}({2})\n", 4) +
+                       "{3}"+
+                       indent_string("port map (\n", 11) +
+                       "{4}\n" +
+                       indent_string(");\n", 11))
     
-    __TB_LOGIC_HEADER = (indent_string("-- test bench logic\n", 4) +
-                         indent_string("process\n", 4) +
-                         indent_string("-- test fail counter\n", 8) +
-                         indent_string("variable fail_count: integer := 0;\n", 8) +
-                         indent_string("begin\n", 4))
+    __CLK_PROC_TEMPLATE = (indent_string("-- clock process\n", 4) +
+                           indent_string("process\n", 4) +
+                           indent_string("begin\n", 4) +
+                           indent_string("tb_{0} <= '0';\n", 8) +
+                           indent_string("wait for {1} ns;\n", 8) +
+                           indent_string("tb_{0} <= '1';\n", 8) +
+                           indent_string("wait for {1} ns;\n", 8) +
+                           indent_string("end process;\n", 4))
+    
+    __TB_PROC_HEADER = (indent_string("-- test bench process\n", 4) +
+                        indent_string("process\n", 4) +
+                        indent_string("-- test fail counter\n", 8) +
+                        indent_string("variable fail_count: integer := 0;\n", 8) +
+                        indent_string("begin\n", 4))
     
     __FOOTER = (indent_string("-- check if all tests passed\n", 8) +
 		        indent_string("if (fail_count = 0) then\n", 8) +
@@ -316,12 +338,12 @@ if __name__ == "__main__":
     # from command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("test_case_file", 
-                        help="the file in which test cases are defined")
+                        help="the JSON file in which test cases are defined")
     parser.add_argument("test_bench_vhdl_file", 
                         help="the file to which the generated VHDL test bench will be written")
     args = parser.parse_args()
     # create test bench
-    tb = CombTestBench()
+    tb = TestBench()
     # load test case file
     tb.load(args.test_case_file)
     # generate test bench VHDL and write to file
