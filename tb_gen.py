@@ -3,42 +3,6 @@
 ##############################################################################
 # A VHDL test bench generator for combinational and sequential logic         #
 ##############################################################################
-#
-#################################
-# Test case (input) file format #   
-#################################
-#
-# Test case files are JSON files. The following properties are read:
-#
-# entity: the name of the entity to test
-# architecture: the name of the architecture to use for the given entity
-# library: the library in which the entity is found
-# clocked: (bool) whether the entity is clocked
-# clock period: (integer) clock period in nanoseconds to use 
-#               if entity is clocked
-# generic_params: an object where the keys are generic parameter
-#                 names and the values are the values to use for these
-#                 parameters
-# input_pins: an object where the keys are the names of the input pins and
-#             the values are the std_logic_vector bus width of these pins
-#             (null for single-bit std_logic)
-# clock_pin: the name of the clock pin (which should not be included
-#            with the input pins) if the entity is clocked
-# output pins: an object of the same format as the input pins
-# test cases: an array of objects, each object representing a test case.
-#             Keys in these test case objects are the names of the input
-#             and output pins, and the values are the given (for input pins) 
-#             or expected (for output pins) values of these pins. Note that 
-#             the correct quotes will automatically be used to surround these 
-#             values, and as such the values should not be quoted. Another
-#             key '_wait' must also be specified, which controls how long to
-#             wait in between setting input pins and checking output pins:
-#             0 means wait for 10 ns, a negative number means wait until 
-#             that many falling clock edges, and a positive number means
-#             wait until that many rising clock edges
-#
-##############################################################################
-
 
 import json
 import argparse
